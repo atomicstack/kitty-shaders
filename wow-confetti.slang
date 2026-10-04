@@ -65,10 +65,9 @@ static const int BOX_MAX = 3;
 static const int SLOT_BASE = 4;
 static const float TIME_WRAP = 64.0;
 
-// hyper's default 16 colour palette in sRGB, in the order hyperpower's
-// values(colors) produces them. particle i of a burst uses colour i % 16.
-static const float3 PALETTE[16] = {
-    float3(0x00, 0x00, 0x00) / 255.0, // black
+// hyper's default palette in sRGB, with pure black removed so every particle
+// is visible on dark backgrounds. particle i of a burst uses colour i % 15.
+static const float3 PALETTE[15] = {
     float3(0xC5, 0x1E, 0x14) / 255.0, // red
     float3(0x1D, 0xC1, 0x21) / 255.0, // green
     float3(0xC7, 0xC3, 0x29) / 255.0, // yellow
@@ -76,7 +75,7 @@ static const float3 PALETTE[16] = {
     float3(0xC8, 0x39, 0xC5) / 255.0, // magenta
     float3(0x20, 0xC5, 0xC6) / 255.0, // cyan
     float3(0xC7, 0xC7, 0xC7) / 255.0, // white
-    float3(0x68, 0x68, 0x68) / 255.0, // light black
+    float3(0x68, 0x68, 0x68) / 255.0, // gray
     float3(0xFD, 0x6F, 0x6B) / 255.0, // light red
     float3(0x67, 0xF8, 0x6F) / 255.0, // light green
     float3(0xFF, 0xFA, 0x72) / 255.0, // light yellow
@@ -290,7 +289,7 @@ draw_particles(float4 color, KittyTextures t, KittyCustomShaderData d, float2 vp
             // canvas fillRect(round(x - 1), round(y - 1), 3, 3)
             float2 corner = round(q - 1.0);
             if (any(p < corner) || any(p >= corner + 3.0)) continue;
-            float3 c = USE_CURSOR_COLOR ? to_srgb(d.cursor_color.rgb) : PALETTE[i % 16];
+            float3 c = USE_CURSOR_COLOR ? to_srgb(d.cursor_color.rgb) : PALETTE[i % 15];
             acc += (1.0 - acc_a) * alpha * c;
             acc_a += (1.0 - acc_a) * alpha;
         }

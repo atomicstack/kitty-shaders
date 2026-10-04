@@ -7,6 +7,9 @@ A kitty (0.49+) custom shader port of the "wow mode" confetti spray from
 5–10 coloured 3×3 particles from the cursor. They arc under gravity and fade out.
 The screen shake is not ported.
 
+the confetti palette omits pure black, so each burst starts with red. the gray
+entry is retained. `USE_CURSOR_COLOR` still uses the configured cursor colour.
+
 ### Install
 
 ```sh
