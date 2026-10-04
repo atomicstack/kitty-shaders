@@ -276,19 +276,23 @@ draw_particles(float4 color, KittyTextures t, KittyCustomShaderData d, float2 vp
         if (any(p < lo) || any(p > hi)) continue;
 
         float drop = PARTICLE_GRAVITY * n * (n + 1.0) * 0.5;
-        float alpha = pow(PARTICLE_ALPHA_FADEOUT, n);
         uint seed = pcg(uint(unorm16(ev.z)) ^ pcg(uint(unorm16(ev.x)) ^ pcg(uint(unorm16(ev.y)))));
         int count = 5 + int(round(rand(seed) * 5.0));
-        float2 vel[10];
-        for (int i = 0; i < 10; i++) {
-            vel[i] = float2(lerp(PARTICLE_VELOCITY_RANGE_X.x, PARTICLE_VELOCITY_RANGE_X.y, rand(seed)),
-                            lerp(PARTICLE_VELOCITY_RANGE_Y.x, PARTICLE_VELOCITY_RANGE_Y.y, rand(seed)));
-        }
-        for (int i = count - 1; i >= 0; i--) {
-            float2 q = origin + vel[i] * n + float2(0.0, drop);
-            // canvas fillRect(round(x - 1), round(y - 1), 3, 3)
+        // generate in random-sequence order, keeping only a bit per hit.
+        // this avoids the dynamically indexed velocity array in every pixel.
+        uint hits = 0u;
+        for (int i = 0; i < count; i++) {
+            float2 vel = float2(lerp(PARTICLE_VELOCITY_RANGE_X.x, PARTICLE_VELOCITY_RANGE_X.y, rand(seed)),
+                                lerp(PARTICLE_VELOCITY_RANGE_Y.x, PARTICLE_VELOCITY_RANGE_Y.y, rand(seed)));
+            float2 q = origin + vel * n + float2(0.0, drop);
             float2 corner = round(q - 1.0);
-            if (any(p < corner) || any(p >= corner + 3.0)) continue;
+            if (all(p >= corner) && all(p < corner + 3.0)) hits |= 1u << i;
+        }
+        if (hits == 0u) continue;
+        float alpha = pow(PARTICLE_ALPHA_FADEOUT, n);
+        // blend hits in the original reverse order, with one fade evaluation.
+        for (int i = count - 1; i >= 0; i--) {
+            if ((hits & (1u << i)) == 0u) continue;
             float3 c = USE_CURSOR_COLOR ? to_srgb(d.cursor_color.rgb) : PALETTE[i % 15];
             acc += (1.0 - acc_a) * alpha * c;
             acc_a += (1.0 - acc_a) * alpha;

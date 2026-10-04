@@ -64,6 +64,8 @@ the default 1000ms timer covers the default lifetime of approximately 940ms.
   52×1 pixels, so windows must be at least 208 pixels wide and 50 pixels tall.
 - Stage 2 must cover the whole screen, but pixels outside the particle
   bounding box return after two texture reads.
+- velocity generation stops at the burst's actual particle count, and fade
+  is calculated only for pixels that hit a particle.
 - Set `var bool DEBUG_BOUNDS = true` in the stage 2 group to tint that box.
 
 Mean GPU use for a full-screen window (4112×2514) on an M3 Max, running
