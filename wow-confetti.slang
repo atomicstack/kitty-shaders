@@ -10,7 +10,7 @@
 //
 //   STAGE 0: read the event ring buffer from t.persist, record a new spray
 //            event if the cursor moved, write the new ring buffer to t.a
-//   STAGE 1: copy t.a back into t.persist for the next frame
+//   STAGE 1: copy t.a into t.persist and cache which events can hit each tile
 //   STAGE 2: draw every particle of every live event over the terminal
 //
 // stages 0 and 1 only render a small strip at the bottom-left of the screen
@@ -24,14 +24,18 @@
 // the state lives in the bottom row of pixels of the persist texture (which
 // is RGBA16 unorm, so each channel stores a 16 bit value):
 //
-//   texel 0:             last spawn time (hi, lo), write index
+//   texel 0:             last spawn time (hi, lo), write index, cache stride
 //   texel 1:             last update time (hi, lo), unused
-//   texel 2:             bounding box of all live particles: min x, min y (UV)
-//   texel 3:             bounding box of all live particles: max x, max y (UV)
-//   texel 4 + i:         slot i: cursor x, cursor y (UV), spawn time mod 64s
+//   texel 2:             bounding box: min x, min y, max x, max y (UV)
+//   texel 3 + i:         slot i: cursor x, cursor y (UV), spawn time mod 64s
+//
+// stage 1 uses the remaining strip texels for 32x32 device-pixel tile masks.
+// each mask stores 48 event bits in three 16-bit channels. header alpha holds
+// (strip width + 1) / 65535, or 1 / 65535 when the strip cannot hold the masks.
+// tile records wrap at the strip width; the event records stay in row zero.
 //
 // stage 2 reads the bounding box first, so pixels away from any confetti
-// cost two texture reads.
+// cost one state texture read.
 //
 // requires cursor_trail to be enabled in kitty.conf, since cursor movement is
 // only reported to shaders via the cursor trail data.
@@ -60,10 +64,11 @@ static const bool DEBUG_BOUNDS = false;
 static const int STAGE = 0;
 // number of events remembered. 48 * 25ms outlives a particle (~0.94s).
 static const int NUM_SLOTS = 48;
-static const int BOX_MIN = 2;
-static const int BOX_MAX = 3;
-static const int SLOT_BASE = 4;
+static const int BOX = 2;
+static const int SLOT_BASE = 3;
 static const float TIME_WRAP = 64.0;
+static const int TILE_SIZE = 32;
+static const int TILE_BASE = SLOT_BASE + NUM_SLOTS;
 
 // hyper's default palette in sRGB, with pure black removed so every particle
 // is visible on dark backgrounds. particle i of a burst uses colour i % 15.
@@ -123,6 +128,27 @@ texel_uv(int i, float2 vp) {
 static float
 unorm16(float v) {
     return round(saturate(v) * 65535.0);
+}
+
+// kitty premultiplies output rgb by alpha even for state textures. undo that
+// here so all four channels reach the texture unchanged. zero alpha is only
+// used for empty data, where premultiplication already makes rgb zero.
+static float4
+state_color(float4 value) {
+    return float4(value.xyz / max(value.w, 1.0 / 65535.0), value.w);
+}
+
+// match rgba16's nearest-integer conversion before undoing premultiplication.
+// multiplying by 65535 first can round across a half-integer boundary. split
+// at the exact power-of-two scale instead: value * 65535 = whole + part - value.
+// the only exact half-integer tie is value == 0.5, which rounds to even (32768).
+static float4
+quantize_unorm16(float4 value) {
+    value = saturate(value);
+    float4 scaled = value * 65536.0;
+    float4 whole = floor(scaled), part = scaled - whole;
+    whole += float4(part - 0.5 > value) - float4(value - 0.5 > part);
+    return whole / 65535.0;
 }
 
 // full precision time split into two 16 bit channels: 64s units and a
@@ -232,25 +258,79 @@ update_state(KittyTextures t, KittyCustomShaderData d, int texel, float2 vp) {
         hi = max(hi, ehi);
     }
     // nothing alive: an empty box, min above max, so stage 2 skips every pixel
-    if (lo.x > hi.x) return texel == BOX_MIN ? float4(1.0, 1.0, 0.0, 1.0) : float4(0.0, 0.0, 0.0, 1.0);
+    if (lo.x > hi.x) return float4(1.0, 1.0, 0.0, 1.0);
     // y flips going to UV, so css min y becomes UV max y. widen by a texel
     // either side to absorb the 16 bit quantisation.
     float2 uv_lo = css_to_uv(float2(lo.x, hi.y), vp) - 1.0 / vp;
     float2 uv_hi = css_to_uv(float2(hi.x, lo.y), vp) + 1.0 / vp;
-    if (texel == BOX_MIN) return float4(saturate(uv_lo), 0.0, 1.0);
-    return float4(saturate(uv_hi), 0.0, 1.0);
+    // quantize before undoing premultiplication, keeping its floating-point
+    // roundoff away from the rgba16 rounding boundaries. max y == 0 means
+    // the box is below all screen pixel centres; use the empty sentinel.
+    float4 box = quantize_unorm16(float4(uv_lo, uv_hi));
+    if (box.w <= 0.0) return float4(1.0, 1.0, 0.0, 1.0);
+    return state_color(box);
+}
+
+// --- stage 1: copy state and cache a conservative event mask per tile ---
+static float4
+copy_and_bin(KittyTextures t, KittyCustomShaderData d, int2 px, int2 group_px, float2 vp) {
+    int2 tiles = (int2(vp) + TILE_SIZE - 1) / TILE_SIZE;
+    int tile_count = tiles.x * tiles.y;
+    // small viewports (or more than 48 slots) use the uncached draw path.
+    bool cached = NUM_SLOTS <= 48 && group_px.x * group_px.y >= TILE_BASE + tile_count && group_px.x < 65535;
+    int texel = px.y * group_px.x + px.x;
+    if (texel < TILE_BASE) {
+        float4 value = t.a.Sample(texel_uv(texel, vp));
+        // reserve a nonzero alpha even without a cache, to preserve rgb.
+        if (texel == 0) value.w = float(cached ? group_px.x + 1 : 1) / 65535.0;
+        return state_color(value);
+    }
+    int tile = texel - TILE_BASE;
+    if (!cached || tile >= tile_count) return float4(0.0, 0.0, 0.0, 1.0);
+    float2 tile_pos = float2(tile % tiles.x, tile / tiles.x) * TILE_SIZE;
+    // a device-pixel margin keeps float rounding at tile edges conservative.
+    float2 tile_lo = (tile_pos - 1.0) / vp;
+    float2 tile_hi = (tile_pos + float(TILE_SIZE) + 1.0) / vp;
+    float4 box = t.a.Sample(texel_uv(BOX, vp));
+    if (any(tile_hi < box.xy) || any(tile_lo > box.zw)) return float4(0.0, 0.0, 0.0, 1.0);
+    int idx = int(unorm16(t.a.Sample(texel_uv(0, vp)).z)) % NUM_SLOTS;
+    uint3 mask = uint3(0u);
+    // stop at the same empty/expired event as drawing, including cursor y == 0.
+    for (int k = 0; k < NUM_SLOTS; k++) {
+        int slot = (idx - k + NUM_SLOTS) % NUM_SLOTS;
+        float3 ev = t.a.Sample(texel_uv(SLOT_BASE + slot, vp)).xyz;
+        if (ev.y <= 0.0) break;
+        float n = slot_age(d.timestamp, ev.z) * FPS;
+        if (n > lifetime_frames()) break;
+        float2 lo, hi;
+        event_bounds(float2(ev.x, 1.0 - ev.y) * vp / PIXEL_SCALE, n, lo, hi);
+        float2 uv_lo = css_to_uv(float2(lo.x, hi.y), vp);
+        float2 uv_hi = css_to_uv(float2(hi.x, lo.y), vp);
+        if (any(tile_hi < uv_lo) || any(tile_lo > uv_hi)) continue;
+        mask[slot / 16] |= 1u << (slot % 16);
+    }
+    return float4(float3(mask) / 65535.0, 1.0);
 }
 
 // --- stage 2: draw the particles ---
 
 static float4
 draw_particles(float4 color, KittyTextures t, KittyCustomShaderData d, float2 vp) {
-    float2 box_lo = t.a.Sample(texel_uv(BOX_MIN, vp)).xy;
-    float2 box_hi = t.a.Sample(texel_uv(BOX_MAX, vp)).xy;
-    if (any(t.pos < box_lo) || any(t.pos > box_hi)) return color;
+    float4 box = t.a.Sample(texel_uv(BOX, vp));
+    if (any(t.pos < box.xy) || any(t.pos > box.zw)) return color;
     if (DEBUG_BOUNDS) color.rgb = lerp(color.rgb, float3(0.0, 0.05, 0.2), 0.5);
 
-    float4 head = t.a.Sample(texel_uv(0, vp));
+    float4 head = t.persist.Sample(texel_uv(0, vp));
+    int cache_columns = int(unorm16(head.w)) - 1;
+    uint3 event_mask = uint3(65535u);
+    if (cache_columns > 0) {
+        int2 tile = int2(floor(t.pos * vp / float(TILE_SIZE)));
+        int tile_columns = (int(vp.x) + TILE_SIZE - 1) / TILE_SIZE;
+        int texel = TILE_BASE + tile.y * tile_columns + tile.x;
+        float2 uv = (float2(texel % cache_columns, texel / cache_columns) + 0.5) / vp;
+        event_mask = uint3(round(t.persist.Sample(uv).xyz * 65535.0));
+        if (all(event_mask == uint3(0u))) return color;
+    }
     int idx = int(unorm16(head.z)) % NUM_SLOTS;
     float now = d.timestamp;
     float max_frames = lifetime_frames();
@@ -265,6 +345,7 @@ draw_particles(float4 color, KittyTextures t, KittyCustomShaderData d, float2 vp
     float acc_a = 0.0;
     for (int k = 0; k < NUM_SLOTS; k++) {
         int slot = (idx - k + NUM_SLOTS) % NUM_SLOTS;
+        if (cache_columns > 0 && (event_mask[slot / 16] & (1u << (slot % 16))) == 0u) continue;
         float4 ev = t.a.Sample(texel_uv(SLOT_BASE + slot, vp));
         if (ev.y <= 0.0) break;
         float n = slot_age(now, ev.z) * FPS;
@@ -312,7 +393,7 @@ fragment_main(float4 color, KittyTextures t, KittyCustomShaderData d) {
     // t.pos spans [0, 1] across it. kitty sizes it in whole pixels, truncating.
     float2 group_px = floor(t.viewport.zw * vp + 1e-3);
     int2 px = int2(floor(t.pos * group_px));
+    if (STAGE == 1) return copy_and_bin(t, d, px, int2(group_px), vp);
     if (px.y != 0 || px.x >= SLOT_BASE + NUM_SLOTS) return float4(0.0, 0.0, 0.0, 1.0);
-    if (STAGE == 0) return update_state(t, d, px.x, vp);
-    return float4(t.a.Sample(texel_uv(px.x, vp)).xyz, 1.0);
+    return update_state(t, d, px.x, vp);
 }

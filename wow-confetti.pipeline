@@ -6,9 +6,9 @@ textures a persist
 # stage 0: record cursor moves into a ring buffer (persist -> a).
 # every cursor move restarts the 1s timer, which outlives the ~0.94s particles.
 # increase animation_stop if fps, fade or threshold overrides extend that life.
-# the state is the first 52 pixels of the bottom row, so only a small strip in
-# the bottom-left corner is rendered. the strip must be at least 52x1 pixels,
-# which holds for windows at least 208 pixels wide and 50 pixels tall.
+# the state is the first 51 pixels of the bottom row, so only a small strip in
+# the bottom-left corner is rendered. the strip must be at least 51x1 pixels,
+# which holds for windows at least 204 pixels wide and 50 pixels tall.
 startgroup
     animation_start cursor-trail-move
     animation_stop 1000
@@ -20,7 +20,8 @@ startgroup
     output_texture a
 endgroup
 
-# stage 1: keep the ring buffer for the next frame (a -> persist)
+# stage 1: keep the ring buffer and cache event masks for screen tiles.
+# masks use spare texels in the existing strip; small windows skip the cache.
 startgroup
     attach
     animation_step 16

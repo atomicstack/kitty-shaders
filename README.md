@@ -51,8 +51,11 @@ the default 1000ms timer covers the default lifetime of approximately 940ms.
 - **Stage 0:** reads a ring buffer of spray events (cursor position and spawn
   time) from the bottom row of the `persist` texture. It adds an event when the
   cursor has moved, throttled to 25ms like hyperpower, and writes the result to
-  texture `a`. It also saves one bounding box around all live particles.
-- **Stage 1:** copies `a` back into `persist`.
+  texture `a`. it also packs one bounding box around all live particles into
+  a single rgba16 texel, compensating for kitty's output premultiplication.
+- **stage 1:** copies `a` back into `persist` and uses spare strip texels to
+  cache which events can affect each 32×32 device-pixel tile. if the strip is
+  too small for the cache, drawing falls back to checking the events directly.
 - **Stage 2:** draws the particles. Hyperpower's per-frame physics have a
   closed form, so each particle's position and alpha come from its event's age.
   Its random velocity comes from a hash of the event.
@@ -61,21 +64,34 @@ the default 1000ms timer covers the default lifetime of approximately 940ms.
 
 - Stages 0 and 1 only render a strip in the bottom-left corner, 25% of the
   width and 2% of the height, which is where the state lives. The state needs
-  52×1 pixels, so windows must be at least 208 pixels wide and 50 pixels tall.
+  51×1 pixels, so windows must be at least 204 pixels wide and 50 pixels tall.
 - Stage 2 must cover the whole screen, but pixels outside the particle
-  bounding box return after two texture reads.
+  bounding box return after one state texture read, in addition to kitty's
+  backbuffer read.
 - velocity generation stops at the burst's actual particle count, and fade
   is calculated only for pixels that hit a particle.
+- tile masks reject unrelated events before fetching their state. particle
+  coverage is kept in a bit mask instead of a dynamically indexed velocity
+  array; blending still follows the original order.
 - Set `var bool DEBUG_BOUNDS = true` in the stage 2 group to tint that box.
 
-Mean GPU use for a full-screen window (4112×2514) on an M3 Max, running
+previous measurements, before the packed bounds, shorter timer and particle
+loop optimisations: mean gpu use for a full-screen window (4112×2514) on an M3 Max, running
 `while true; do printf "foo "; sleep 0.001; done`:
 
 | shader | `sync_to_monitor no` | `sync_to_monitor yes` |
 |---|---|---|
 | none | 71% | 56% |
 | first version (3 full-screen passes) | 98% | 64% |
-| current | 71% | 58% |
+| strip passes and bounds rejection | 71% | 58% |
+
+an offscreen m3 max benchmark at the same resolution measured approximately
+1.70ms per frame before tile culling and 0.61ms with it for frequent cursor
+moves spread across the screen. normal simulated typing remained near the
+full-screen pass cost (approximately 0.42ms). these are timings around the
+complete three-pass shader pipeline, including final srgb conversion, not activity monitor percentages or timings
+for rendering the entire terminal. tile culling does not reduce the animation
+frame rate or eliminate the full-screen pass.
 
 ### Checking it compiles
 
@@ -88,3 +104,4 @@ check the palette and animation lifetime with:
 ```sh
 python3 -m unittest -v test_confetti.py
 ```
+
