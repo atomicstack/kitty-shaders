@@ -40,6 +40,12 @@ var float PIXEL_SCALE = 1.0      # non-retina displays
 var bool USE_CURSOR_COLOR = true # hyperpower's non-wow mode
 ```
 
+if changing `FPS`, `PARTICLE_ALPHA_FADEOUT` or `PARTICLE_ALPHA_MIN_THRESHOLD`,
+keep `animation_stop` above the particle lifetime with at least one frame of
+margin. lifetime in milliseconds is
+`1000 * log(PARTICLE_ALPHA_MIN_THRESHOLD) / log(PARTICLE_ALPHA_FADEOUT) / FPS`.
+the default 1000ms timer covers the default lifetime of approximately 940ms.
+
 ### How it works
 
 - **Stage 0:** reads a ring buffer of spray events (cursor position and spawn
@@ -73,4 +79,10 @@ Mean GPU use for a full-screen window (4112×2514) on an M3 Max, running
 
 ```sh
 kitty +launch check.py wow-confetti.pipeline
+```
+
+check the palette and animation lifetime with:
+
+```sh
+python3 -m unittest -v test_confetti.py
 ```

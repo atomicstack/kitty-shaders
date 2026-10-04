@@ -4,13 +4,14 @@
 textures a persist
 
 # stage 0: record cursor moves into a ring buffer (persist -> a).
-# every cursor move restarts the 1.5s timer, which outlives the ~0.94s particles.
+# every cursor move restarts the 1s timer, which outlives the ~0.94s particles.
+# increase animation_stop if fps, fade or threshold overrides extend that life.
 # the state is the first 52 pixels of the bottom row, so only a small strip in
 # the bottom-left corner is rendered. the strip must be at least 52x1 pixels,
 # which holds for windows at least 208 pixels wide and 50 pixels tall.
 startgroup
     animation_start cursor-trail-move
-    animation_stop 1500
+    animation_stop 1000
     animation_step 16
     viewport_pos 0 0
     viewport_size 0.25 0.02

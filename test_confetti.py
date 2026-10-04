@@ -1,5 +1,6 @@
-"""check the confetti palette without launching kitty."""
+"""check the confetti palette and animation lifetime without launching kitty."""
 
+import math
 from pathlib import Path
 import re
 import unittest
@@ -19,6 +20,22 @@ class ConfettiSettingsTest(unittest.TestCase):
         ]
         self.assertTrue(colors, "the confetti palette must not be empty")
         self.assertNotIn((0, 0, 0), colors, "black particles disappear on dark backgrounds")
+
+    def test_animation_stops_soon_after_particles_expire(self):
+        source = (ROOT / "wow-confetti.slang").read_text()
+        pipeline = (ROOT / "wow-confetti.pipeline").read_text()
+
+        def setting(name):
+            return float(re.search(rf"static const float {name} = ([\d.]+);", source)[1])
+
+        lifetime_ms = (
+            1000 * math.log(setting("PARTICLE_ALPHA_MIN_THRESHOLD"))
+            / math.log(setting("PARTICLE_ALPHA_FADEOUT")) / setting("FPS")
+        )
+        stop_ms = int(re.search(r"animation_stop\s+(\d+)", pipeline)[1])
+        step_ms = int(re.search(r"animation_step\s+(\d+)", pipeline)[1])
+        self.assertGreaterEqual(stop_ms, lifetime_ms + step_ms, "allow a frame to clear expired particles")
+        self.assertLessEqual(stop_ms, lifetime_ms + 100, "avoid scheduling a long invisible animation tail")
 
 
 if __name__ == "__main__":
