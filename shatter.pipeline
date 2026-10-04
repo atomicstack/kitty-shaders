@@ -1,0 +1,40 @@
+# white squares burst out of the cursor, land on its text row and shatter.
+# needs `cursor_trail 1` (and ideally `cursor_trail_start_threshold 0`) in kitty.conf.
+
+textures a persist
+
+# stage 0: record cursor moves into a ring buffer (persist -> a).
+# every cursor move restarts the timer, which must outlast MAX_LIFETIME (1.3s)
+# in shatter.slang by at least one animation step.
+# the state is the first 52 pixels of the bottom two rows, so only a small
+# strip in the bottom-left corner is rendered. the strip must be at least 52x2
+# pixels, which holds for windows at least 208 pixels wide and 100 pixels tall.
+startgroup
+    animation_start cursor-trail-move
+    animation_stop 1350
+    animation_step 16
+    viewport_pos 0 0
+    viewport_size 0.25 0.02
+    var int STAGE = 0
+    shaders shatter
+    output_texture a
+endgroup
+
+# stage 1: keep the ring buffer for the next frame (a -> persist)
+startgroup
+    attach
+    animation_step 16
+    viewport_pos 0 0
+    viewport_size 0.25 0.02
+    var int STAGE = 1
+    shaders shatter
+    output_texture persist
+endgroup
+
+# stage 2: draw the squares and shards over the terminal
+startgroup
+    attach
+    animation_step 16
+    var int STAGE = 2
+    shaders shatter
+endgroup

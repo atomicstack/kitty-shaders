@@ -105,3 +105,58 @@ check the palette and animation lifetime with:
 python3 -m unittest -v test_confetti.py
 ```
 
+## shatter
+
+A sibling of wow-confetti. Each cursor move bursts 6–10 white 3×3 squares out
+of the centre of the cursor. They arc under gravity and land on the bottom edge
+of the cursor's text row. On impact, each square breaks into its four quarters
+(half the side length each). The quarters pop apart, settle on the line and
+fade out over about 0.4s.
+
+### Install
+
+```sh
+mkdir -p ~/.config/kitty/shaders
+ln -s $PWD/shatter.pipeline $PWD/shatter.slang ~/.config/kitty/shaders/
+```
+
+Use the same `cursor_trail` settings as wow-confetti, with
+`custom_shaders shatter`.
+
+### Tuning
+
+The tunables at the top of `shatter.slang` include `COLOR` (sRGB),
+`SQUARE_SIZE`, `GRAVITY`, the launch speed and angle, and the shard timing and
+velocities. If a change makes bursts live longer than `MAX_LIFETIME` (1.3s),
+raise it and keep `animation_stop` in the pipeline at least one frame above it.
+The tests check this.
+
+### How it works
+
+It uses the same three-pass layout as wow-confetti: a state strip in the
+bottom-left corner, and a bounding box so the full-screen pass can skip empty
+pixels. Each event also stores its floor, the bottom edge of the cursor's row,
+in a second strip row. The strip therefore needs 52×2 pixels, so windows must
+be at least 208 pixels wide and 100 pixels tall.
+
+Nothing is simulated step by step:
+
+- **Squares:** a square is at `o + v n + (0, g n (n + 1) / 2)` after `n` frames.
+- **Landing:** the landing frame is the positive root of a quadratic.
+- **Shards:** they follow the same closed form from the landing point, clamped
+  to the floor.
+
+### Checking it
+
+```sh
+kitty +launch check.py shatter.pipeline
+python3 -m unittest -v test_shatter.py
+```
+
+The tests mirror the shader's maths in Python and check several things:
+
+- the landing frame matches a frame-by-frame simulation;
+- the bounding box never clips a square or shard;
+- shards never sink below the floor;
+- `MAX_LIFETIME`, the ring buffer and `animation_stop` cover the longest
+  burst.
